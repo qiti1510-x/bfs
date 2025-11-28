@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>可自定义的BFS逐步演示（C++风格）</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: '微软雅黑', sans-serif; padding: 20px; }
+        .container { display: flex; gap: 30px; margin-bottom: 20px; }
+        
+        /* 网格样式 */
+        .grid-container { flex: 1; }
+        #grid { border-collapse: collapse; margin-bottom: 10px; }
+        #grid td {
+            width: 60px; height: 60px; border: 1px solid #ddd;
+            text-align: center; font-size: 14px; cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #grid td:hover { background-color: #f0f0f0; }
+        #grid td.start { background-color: #2ecc71; color: white; font-weight: bold; }
+        #grid td.end { background-color: #e74c3c; color: white; font-weight: bold; }
+        #grid td.obstacle { background-color: #f1c40f; background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAQElEQVQoU2NkYGD4z8DAwMgABXAGNgGwSgwVAFbmAgXQdISfAAAAAElFTkSuQmCC'); }
+        #grid td.visited { background-color: #3498db; color: white; }
+        #grid td.current { background-color: #e67e22; color: white; font-weight: bold; }
+        #grid td.path { background-color: #9b59b6; color: white; font-weight: bold; }
+        
+        /* 侧边栏样式 */
+        .side-panel { width: 350px; }
+        .queue-box, .code-box { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .queue-box h3, .code-box h3 { font-size: 16px; margin-bottom: 10px; }
+        #queue { min-height: 120px; padding: 10px; background-color: #f8f8f8; border-radius: 5px; }
+        .queue-item { padding: 8px; margin: 5px 0; border: 1px solid #ddd; border-radius: 4px; background-color: #ecf0f1; }
+        .queue-item:first-child { background-color: #e67e22; color: white; font-weight: bold; }
+        #code { height: 300px; padding: 10px; background-color: #f8f8f8; border: none; resize: none; font-family: 'Consolas', monospace; font-size: 12px; }
+        
+        /* 控制栏样式 */
+        .controls { margin-bottom: 20px; padding: 10px; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; }
+        .controls .edit-mode { margin-right: 20px; }
+        .controls button {
+            padding: 8px 15px; margin-right: 10px;
+            background-color: #3498db; color: white;
+            border: none; border-radius: 5px; cursor: pointer;
+        }
+        .controls button:hover { background-color: #2980b9; }
+        .controls button:disabled { background-color: #bdc3c7; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <!-- 控制栏（自定义地图） -->
+    <div class="controls">
+        <span class="edit-mode">
+            当前操作：
+            <select id="editMode">
+                <option value="start">设置起点</option>
+                <option value="end">设置终点</option>
+                <option value="obstacle">设置障碍</option>
+                <option value="clear">清空单元格</option>
+            </select>
+        </span>
+        <button id="resetMapBtn">重置地图</button>
+        <button id="resetBfsBtn" disabled>重置BFS</button>
+        <button id="nextBtn" disabled>下一步</button>
+    </div>
+
+    <!-- 主容器（网格+侧边栏） -->
+    <div class="container">
+        <!-- 网格区域 -->
+        <div class="grid-container">
+            <table id="grid"></table>
+        </div>
+        
+        <!-- 侧边栏（队列+代码） -->
+        <div class="side-panel">
+            <div class="queue-box">
+                <h3>队列状态（C++ std::queue）</h3>
+                <div id="queue"></div>
+            </div>
+            
+            <div class="code-box">
+                <h3>C++代码片段（当前步骤）</h3>
+                <textarea id="code" readonly></textarea>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 1. 全局变量定义
+        const grid = document.getElementById('grid');
+        const queueDiv = document.getElementById('queue');
+        const codeTextarea = document.getElementById('code');
+        const editModeSelect = document.getElementById('editMode');
+        const resetMapBtn = document.getElementById('resetMapBtn');
+        const resetBfsBtn = document.getElementById('resetBfsBtn');
+        const nextBtn = document.getElementById('nextBtn');
+
+        // 2. 地图初始化（默认值）
+        let rows = 5; // 行数
+        let cols = 4; // 列数
+        let map = []; // 地图数据（-1=障碍，0=起点，7=终点，其他=可走节点）
+        let startPos = { y: 0, x: 0 }; // 起点坐标（行，列）
+        let endPos = { y: 3, x: 2 }; // 终点坐标（行，列）
+        let isFound = false; // 是否找到终点
+
+        // 3. BFS状态管理（逐步执行）
+        let queue = []; // BFS队列（存储节点：{y, x, path}）
+        let visited = []; // 访问标记（二维数组）
+        let currentStep = 'init'; // 步骤状态：init=未开始，checking=检查邻居，finished=结束
+        let currentNode = null; // 当前处理的队首节点
+        let currentDir = 0; // 当前检查的方向（0-3：上、下、左、右）
+
+        // 4. C++代码模板（按步骤显示）
+        const cxxCode = {
+            init: `// 初始化队列和访问标记
+queue<Node> q;
+bool visited[5][4] = {false};
+Node start = {0, 0, {{0,0}}}; // 起点（行0，列0）
+q.push(start);
+visited[0][0] = true;`,
+            process_node: `// 取队首节点（当前处理节点）
+Node curr = q.front();
+cout << "处理队首节点：(" << curr.y << ", " << curr.x << ")" << endl;`,
+            check_neighbor: `// 检查方向：${getDirName(currentDir)}
+int ny = curr.y + dirs[${currentDir}][0];
+int nx = curr.x + dirs[${currentDir}][1];
+if (ny >=0 && ny <5 && nx >=0 && nx <4 && !visited[ny][nx] && map[ny][nx]!=-1) {
+    visited[ny][nx] = true;
+    Node next = {ny, nx, curr.path};
+    next.path.push_back({ny, nx});
+    q.push(next);
+    cout << "找到有效邻居：(" << ny << ", " << nx << ")，入队！" << endl;
+}`,
+            finish_neighbor: `// 所有邻居检查完毕，队首出队
+q.pop();
+cout << "队首节点处理完毕，出队！" << endl;`,
+            found: `// 找到终点！路径：
+for (auto &p : curr.path) {
+    cout << "(" << p.first << ", " << p.second << ") ";
+}
+cout << endl;`
+        };
+
+        // 5. 工具函数
+        // 获取方向名称
+        function getDirName(dir) {
+            switch (dir) {
+                case 0: return "上";
+                case 1: return "下";
+                case 2: return "左";
+                case 3: return "右";
+                default: return "未知";
+            }
+        }
+
+        // 初始化地图（默认值）
+        function initMap() {
+            map = [
+                [0, 1, -1, 5],   // 行0
+                [1, 2, 3, 4],    // 行1
+                [2, 3, -1, 5],   // 行2
+                [3, -1, 7, 6],   // 行3
+                [4, 5, 6, -1]    // 行4
+            ];
+            startPos = { y: 0, x: 0 };
+            endPos = { y: 3, x: 2 };
+            renderGrid();
+        }
+
+        // 渲染网格
+        function renderGrid() {
+            grid.innerHTML = '';
+            for (let y = 0; y < rows; y++) {
+                const tr = document.createElement('tr');
+                for (let x = 0; x < cols; x++) {
+                    const td = document.createElement('td');
+                    const value = map[y][x];
+                    // 设置单元格样式
+                    if (y === startPos.y && x === startPos.x) {
+                        td.className = 'start';
+                        td.textContent = `起点\n${value}`;
+                    } else if (y === endPos.y && x === endPos.x) {
+                        td.className = 'end';
+                        td.textContent = `终点\n${value}`;
+                    } else if (value === -1) {
+                        td.className = 'obstacle';
+                    } else {
+                        td.className = 'unvisited';
+                        td.textContent = value;
+                    }
+                    // 存储坐标数据
+                    td.dataset.y = y;
+                    td.dataset.x = x;
+                    // 添加点击事件（自定义地图）
+                    td.addEventListener('click', handleGridClick);
+                    tr.appendChild(td);
+                }
+                grid.appendChild(tr);
+            }
+        }
+
+        // 处理网格点击（自定义设置）
+        function handleGridClick(e) {
+            const td = e.target;
+            const y = parseInt(td.dataset.y);
+            const x = parseInt(td.dataset.x);
+            const mode = editModeSelect.value;
+
+            switch (mode) {
+                case 'start':
+                    // 清除原来的起点
+                    if (startPos.y !== -1) {
+                        map[startPos.y][startPos.x] = startPos.y + startPos.x; // 恢复为可走节点
+                    }
+                    // 设置新起点
+                    startPos.y = y;
+                    startPos.x = x;
+                    map[y][x] = 0; // 起点标记为0
+                    break;
+                case 'end':
+                    // 清除原来的终点
+                    if (endPos.y !== -1) {
+                        map[endPos.y][endPos.x] = endPos.y + endPos.x; // 恢复为可走节点
+                    }
+                    // 设置新终点
+                    endPos.y = y;
+                    endPos.x = x;
+                    map[y][x] = 7; // 终点标记为7
+                    break;
+                case 'obstacle':
+                    // 设置障碍（-1）
+                    map[y][x] = -1;
+                    // 如果设置的是起点或终点，重置其位置
+                    if (y === startPos.y && x === startPos.x) {
+                        startPos = { y: -1, x: -1 };
+                    }
+                    if (y === endPos.y && x === endPos.x) {
+                        endPos = { y: -1, x: -1 };
+                    }
+                    break;
+                case 'clear':
+                    // 清空为可走节点（行+列）
+                    map[y][x] = y + x;
+                    // 如果是起点或终点，恢复其标记
+                    if (y === startPos.y && x === startPos.x) {
+                        map[y][x] = 0;
+                    } else if (y === endPos.y && x === endPos.x) {
+                        map[y][x] = 7;
+                    }
+                    break;
+            }
+
+            // 重新渲染网格
+            renderGrid();
+        }
+
+        // 5. 更新队列显示
+        function updateQueue() {
+            queueDiv.innerHTML = '';
+            queue.forEach((node, idx) => {
+                const item = document.createElement('div');
+                item.className = 'queue-item';
+                item.textContent = `节点(${node.y}, ${node.x})`;
+                queueDiv.appendChild(item);
+            });
+        }
+
+        // 6. 标记路径
+        function markPath(path) {
+            path.forEach(({ y, x }) => {
+                const td = grid.rows[y].cells[x];
+                td.className = 'path';
+            });
+        }
+
+        // 7. 重置BFS（准备逐步执行）
+        function resetBFS() {
+            // 检查起点和终点是否有效
+            if (startPos.y === -1 || startPos.x === -1) {
+                alert('请先设置起点！');
+                return;
+            }
+            if (endPos.y === -1 || endPos.x === -1) {
+                alert('请先设置终点！');
+                return;
+            }
+            if (map[startPos.y][startPos.x] === -1) {
+                alert('起点不能是障碍！');
+                return;
+            }
+            if (map[endPos.y][endPos.x] === -1) {
+                alert('终点不能是障碍！');
+                return;
+            }
+
+            // 重置状态
+            isFound = false;
+            queue = [];
+            visited = Array(rows).fill().map(() => Array(cols).fill(false));
+            currentStep = 'init';
+            currentNode = null;
+            currentDir = 0;
+
+            // 初始化队列
+            queue.push({
+                y: startPos.y,
+                x: startPos.x,
+                path: [{ y: startPos.y, x: startPos.x }]
+            });
+            visited[startPos.y][startPos.x] = true;
+
+            // 更新界面
+            updateQueue();
+            codeTextarea.value = cxxCode.init; // 显示初始化代码
+            nextBtn.disabled = false;
+            resetBfsBtn.disabled = true;
+        }
+
+        // 8. 逐步执行BFS（下一步按钮逻辑）
+        function nextStep() {
+            if (isFound || queue.length === 0) {
+                alert(isFound ? '已找到终点！' : '队列为空，未找到路径！');
+                nextBtn.disabled = true;
+                resetBfsBtn.disabled = false;
+                return;
+            }
+
+            switch (currentStep) {
+                case 'init':
+                    // 步骤1：取队首节点（当前处理节点）
+                    currentNode = queue[0];
+                    const currTd = grid.rows[currentNode.y].cells[currentNode.x];
+                    currTd.className = 'current'; // 标记为当前节点
+                    // 显示代码
+                    codeTextarea.value = cxxCode.process_node;
+                    // 更新状态
+                    currentStep = 'checking';
+                    currentDir = 0;
+                    break;
+
+                case 'checking':
+                    // 步骤2：检查当前方向的邻居
+                    const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]]; // 上、下、左、右
+                    const dirName = getDirName(currentDir);
+                    const [dy, dx] = dirs[currentDir];
+                    const ny = currentNode.y + dy;
+                    const nx = currentNode.x + dx;
+
+                    // 显示检查邻居的代码
+                    codeTextarea.value = cxxCode.check_neighbor.replace('${getDirName(currentDir)}', dirName);
+
+                    // 边界+非障碍+未访问检查
+                    if (ny >= 0 && ny < rows && nx >= 0 && nx < cols) {
+                        const neighborTd = grid.rows[ny].cells[nx];
+                        if (map[ny][nx] !== -1 && !visited[ny][nx]) {
+                            // 标记为已访问
+                            visited[ny][nx] = true;
+                            neighborTd.className = 'visited';
+                            // 构建新节点（继承路径）
+                            const newPath = [...currentNode.path, { y: ny, x: nx }];
+                            const newNode = { y: ny, x: nx, path: newPath };
+                            // 入队
+                            queue.push(newNode);
+                            // 更新队列
+                            updateQueue();
+                            // 检查是否是终点
+                            if (ny === endPos.y && nx === endPos.x) {
+                                isFound = true;
+                                markPath(newPath);
+                                codeTextarea.value = cxxCode.found;
+                                alert('找到终点！路径已标记！');
+                                nextBtn.disabled = true;
+                                resetBfsBtn.disabled = false;
+                                return;
+                            }
+                        }
+                    }
+
+                    // 下一个方向
+                    currentDir++;
+                    if (currentDir >= dirs.length) {
+                        // 步骤3：所有邻居检查完毕，队首出队
+                        const currTd = grid.rows[currentNode.y].cells[currentNode.x];
+                        currTd.className = 'visited'; // 标记为已访问
+                        queue.shift(); // 出队
+                        updateQueue(); // 更新队列
+                        // 显示出队代码
+                        codeTextarea.value = cxxCode.finish_neighbor;
+                        // 重置状态，准备处理下一个队首
+                        currentStep = 'init';
+                        currentNode = null;
+                        currentDir = 0;
+                        resetBfsBtn.disabled = false;
+                    }
+                    break;
+            }
+        }
+
+        // 9. 事件监听
+        resetMapBtn.addEventListener('click', () => {
+            initMap();
+            renderGrid();
+            resetBfsBtn.disabled = false;
+        });
+
+        resetBfsBtn.addEventListener('click', resetBFS);
+        nextBtn.addEventListener('click', nextStep);
+
+        // 10. 初始化页面
+        initMap();
+        renderGrid();
+    </script>
+</body>
+</html>
